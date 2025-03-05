@@ -384,6 +384,7 @@ class GitCode(Backend):
                             return
 
                         operate_log['issue'] = issue
+                        operate_log['user_data'] = self.__get_user(operate_log.get('user', {}).get('login'))
                         yield operate_log
 
         raw_pulls_groups = self.client.pulls(from_date=from_date)
@@ -400,6 +401,7 @@ class GitCode(Backend):
                             return
 
                         operate_log['pull'] = pull
+                        operate_log['user_data'] = self.__get_user(operate_log.get('user', {}).get('login'))
                         yield operate_log
 
     def __fetch_stargazers(self, from_date, to_date):
@@ -725,7 +727,7 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         }
         path = urijoin(f"issues/{str(issue_number)}/operate_logs")
         url_next = urijoin(self.base_url, 'repos', self.owner, path)
-        return self.fetch_items(path, payload, url_next)
+        return self.fetch_items(path, payload, url_next, is_page=False)
 
     
     def stargazers(self, from_date):
