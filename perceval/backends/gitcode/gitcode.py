@@ -213,9 +213,9 @@ class GitCode(Backend):
             CATEGORY_PULL_REQUEST: lambda: self.__fetch_pull_requests(from_date, to_date),
             CATEGORY_REPO: lambda: self.__fetch_repo_info(),
             CATEGORY_EVENT: lambda: self.__fetch_events(from_date, to_date),
-            CATEGORY_STARGAZER: lambda: self.__fetch_stargazers(to_date),
-            CATEGORY_FORK: lambda: self.__fetch_forks(to_date),
-            CATEGORY_WATCH: lambda: self.__fetch_watchs(to_date)
+            CATEGORY_STARGAZER: lambda: self.__fetch_stargazers(from_date, to_date),
+            CATEGORY_FORK: lambda: self.__fetch_forks(from_date, to_date),
+            CATEGORY_WATCH: lambda: self.__fetch_watchs(from_date, to_date)
         }
         if category in fetch_category_switch:
             items = fetch_category_switch[category]()
@@ -263,8 +263,8 @@ class GitCode(Backend):
         """
         if "fetched_on" in item:
             return item['fetched_on']
-        elif "star_at" in item:
-            ts = item['star_at']
+        elif "starred_at" in item:
+            ts = item['starred_at']
         elif "forks_count" in item and "fetched_on" not in item:
             ts = item['created_at']
         elif "watch_at" in item:
@@ -402,37 +402,39 @@ class GitCode(Backend):
                         operate_log['pull'] = pull
                         yield operate_log
 
-    def __fetch_stargazers(self, to_date):
+    def __fetch_stargazers(self, from_date, to_date):
         """Fetch the stargazers"""
-        raw_stargazers_groups = self.client.stargazers()
+        raw_stargazers_groups = self.client.stargazers(from_date=from_date)
         for raw_stargazers in raw_stargazers_groups:
             stargazers = json.loads(raw_stargazers)
             for stargazer in stargazers:
-
-                if str_to_datetime(stargazer['star_at']) > to_date:
+                if str_to_datetime(stargazer['starred_at']) > to_date:
                     return
+                stargazer['user_data'] = self.__get_user(stargazer.get('login'))
                 yield stargazer
 
-    def __fetch_forks(self, to_date):
+    def __fetch_forks(self, from_date, to_date):
         """Fetch the forks"""
-        raw_forks_groups = self.client.forks()
+        raw_forks_groups = self.client.forks(from_date=from_date)
         for raw_forks in raw_forks_groups:
             forks = json.loads(raw_forks)
             for fork in forks:
 
                 if str_to_datetime(fork['created_at']) > to_date:
                     return
+                fork['user_data'] = self.__get_user(fork.get('owner', {}).get('login'))
                 yield fork
 
-    def __fetch_watchs(self, to_date):
+    def __fetch_watchs(self, from_date, to_date):
         """Fetch the watchs"""
-        raw_watchs_groups = self.client.watchs()
+        raw_watchs_groups = self.client.watchs(from_date=from_date)
         for raw_watchs in raw_watchs_groups:
             watchs = json.loads(raw_watchs)
             for watch in watchs:
 
                 if str_to_datetime(watch['watch_at']) > to_date:
                     return
+                watch['user_data'] = self.__get_user(watch.get('login'))
                 yield watch
 
     def __fetch_repo_info(self):
@@ -726,29 +728,32 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         return self.fetch_items(path, payload, url_next)
 
     
-    def stargazers(self):
+    def stargazers(self, from_date):
         """ Fetch the stargazers from the repository. """
         payload = {
-            'per_page': self.max_items
+            'per_page': self.max_items,
+            'starred_after': from_date
         }
 
         path = urijoin("stargazers")
         return self.fetch_items(path, payload)
 
-    def forks(self):
+    def forks(self, from_date):
         """ Fetch the forks from the repository. """
         payload = {
             'per_page': self.max_items,
+            'created_after': from_date,
             'sort': 'oldest'
         }
 
         path = urijoin("forks")
         return self.fetch_items(path, payload)
 
-    def watchs(self):
+    def watchs(self, from_date):
         """ Fetch the subscribers from the repository. """
         payload = {
-            'per_page': self.max_items
+            'per_page': self.max_items,
+            'watched_after': from_date
         }
 
         path = urijoin("subscribers")
