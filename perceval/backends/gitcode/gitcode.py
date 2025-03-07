@@ -24,6 +24,8 @@ import json
 import logging
 
 import requests
+import random
+import time
 from grimoirelab_toolkit.datetime import (datetime_to_utc,
                                           str_to_datetime, datetime_utcnow)
 from grimoirelab_toolkit.uris import urijoin
@@ -60,6 +62,9 @@ PER_PAGE = 100
 # Default sleep time and retries to deal with connection/server problems
 DEFAULT_SLEEP_TIME = 1
 MAX_RETRIES = 5
+
+TOEKN_RATE_LIMIT_MAX_RETRIES = 5
+TOEKN_RATE_LIMIT_SLEEP_TIME = 120
 
 TARGET_ISSUE_FIELDS = ['user', 'assignee']
 TARGET_PULL_FIELDS = ['user', 'assignees', "testers", "number"]
@@ -663,12 +668,8 @@ class GitCodeClient(HttpClient, RateLimitHandler):
                  max_items=MAX_CATEGORY_ITEMS_PER_PAGE, archive=None, from_archive=False, ssl_verify=True):
         self.owner = owner
         self.repository = repository
-        # Just take the first token from tokens
-        if tokens:
-            self.access_token = tokens[0]
-        else:
-            self.access_token = None
-        # GitCode doesn't have rate limit check yet
+        self.access_token_list = tokens
+
         self.last_rate_limit_checked = None
         self.max_items = max_items
 
@@ -681,8 +682,6 @@ class GitCodeClient(HttpClient, RateLimitHandler):
                          extra_headers=self._set_extra_headers(),
                          extra_status_forcelist=self.EXTRA_STATUS_FORCELIST,
                          archive=archive, from_archive=from_archive, ssl_verify=ssl_verify)
-        # refresh the access token
-        self._refresh_access_token()
 
     def issue_comments(self, issue_number):
         """Get the issue comments """
@@ -905,21 +904,31 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         :returns a response object
         """
         # Add the access_token to the payload
-        if self.access_token:
-            if payload is None:
-                payload = {'access_token': self.access_token}
-            else:
-                payload['access_token'] = self.access_token
-
-        response = super().fetch(url, payload, headers, method, stream, auth)
-
-        # if not self.from_archive:
-        #    if self._need_check_tokens():
-        #        self._choose_best_api_token()
-        #    else:
-        #        self.update_rate_limit(response)
-
-        return response
+        
+        retries = 0 
+        while retries <= TOEKN_RATE_LIMIT_MAX_RETRIES:
+            if self.access_token_list:
+                access_token = random.choice(self.access_token_list)
+                if payload is None:
+                    payload = {'access_token': access_token}
+                else:
+                    payload['access_token'] = access_token
+            
+            try:
+                response = super().fetch(url, payload, headers, method, stream, auth)
+            except Exception as e:
+                if e.response.status_code == 400 and '"error_code":429' in e.response.text:
+                    if retries == TOEKN_RATE_LIMIT_MAX_RETRIES:
+                        logger.debug("All retries failed. Pausing for 2 minutes")
+                        time.sleep(TOEKN_RATE_LIMIT_SLEEP_TIME)
+                        retries = 0
+                    retries += 1
+                    logger.debug(f"Retry {url} {retries}...")
+                    time.sleep(1) 
+                    continue
+                raise e
+            return response
+          
 
     def fetch_items(self, path, payload, url_next=None, is_page=True):
         """Return the items from gitcode API using links pagination"""
