@@ -291,18 +291,18 @@ class GitCode(Backend):
         'issue', 'pull_request' , 'stargazer', 'fork', 'watch' and 'repo' information.
         """
 
-        if "base" in item:
+        if "action_type" in item:
+            category = CATEGORY_EVENT
+        elif "base" in item:
             category = CATEGORY_PULL_REQUEST
         elif "fetched_on" in item:
             category = CATEGORY_REPO
-        elif "star_at" in item:
+        elif "starred_at" in item:
             category = CATEGORY_STARGAZER
-        elif "forks_count" in item and "fetched_on" not in item:
+        elif "pushed_at" in item:
             category = CATEGORY_FORK
         elif "watch_at" in item:
             category = CATEGORY_WATCH
-        elif "action_type" in item:
-            category = CATEGORY_EVENT
         else:
             category = CATEGORY_ISSUE
 
@@ -330,7 +330,7 @@ class GitCode(Backend):
 
                 self.__init_extra_issue_fields(issue)
                 for field in TARGET_ISSUE_FIELDS:
-                    if not issue[field]:
+                    if field not in issue or not issue[field]:
                         continue
                     if field == 'user':
                         issue[field + '_data'] = self.__get_user(issue[field]['login'])
@@ -907,25 +907,40 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         
         retries = 0 
         while retries <= TOEKN_RATE_LIMIT_MAX_RETRIES:
+            access_token = None
             if self.access_token_list:
                 access_token = random.choice(self.access_token_list)
-                if payload is None:
-                    payload = {'access_token': access_token}
-                else:
-                    payload['access_token'] = access_token
+            if payload is None:
+                payload = {'access_token': access_token}
+            else:
+                payload['access_token'] = access_token
             
             try:
                 response = super().fetch(url, payload, headers, method, stream, auth)
             except Exception as e:
-                if e.response.status_code == 400 and '"error_code":429' in e.response.text:
+                # 429: User exceeded application rate limit
+                # 403: The request is not allowed. For example, the user is not allowed to delete items
+                # 404: The resource cannot be accessed. For example, the resource's ID cannot be found, or the user does not have permission to access the resource
+                if e.response and e.response.status_code == 400 and '"error_code":429' in e.response.text:
                     if retries == TOEKN_RATE_LIMIT_MAX_RETRIES:
-                        logger.debug("All retries failed. Pausing for 2 minutes")
+                        logger.info("All retries failed. Pausing for 2 minutes")
                         time.sleep(TOEKN_RATE_LIMIT_SLEEP_TIME)
                         retries = 0
                     retries += 1
-                    logger.debug(f"Retry {url} {retries}...")
+                    logger.info(f"Retry {url} {retries}...")
                     time.sleep(1) 
                     continue
+                try:
+                    if type(e.args[0]) is str:
+                        reason = e.args[0]
+                    else:
+                        reason = e.args[0].reason.args[0]
+                    if ("403" in reason or "404" in reason) and access_token:
+                        self.access_token_list.remove(access_token)
+                        logger.info(f"There is a problem with {access_token} token, remove {access_token} token now")
+                        continue
+                except Exception as ee:
+                    raise e
                 raise e
             return response
           
