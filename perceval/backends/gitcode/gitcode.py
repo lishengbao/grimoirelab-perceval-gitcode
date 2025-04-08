@@ -473,7 +473,10 @@ class GitCode(Backend):
         for raw_comments in group_comments:
 
             for comment in json.loads(raw_comments):
-                comment['user_data'] = self.__get_user(comment['user']['login'])
+                if "user" in comment:
+                    comment['user_data'] = self.__get_user(comment['user']['login'])
+                else:
+                    comment['user_data'] = {}
                 comments.append(comment)
 
         return comments
@@ -512,7 +515,7 @@ class GitCode(Backend):
         for raw_action_logs in group_raw_action_logs:
             action_logs = json.loads(raw_action_logs)
             for action_log in action_logs:
-                if action_log["action_type"] == "merged":
+                if action_log.get("action_type") == "merged":
                     result = action_log["user"]["login"]
                     break
         return result
@@ -602,7 +605,8 @@ class GitCode(Backend):
         user = json.loads(user_raw)
         user_orgs_raw = \
             self.client.user_orgs(login)
-        user['organizations'] = json.loads(user_orgs_raw)
+        if len(user) > 0:
+            user['organizations'] = json.loads(user_orgs_raw)
 
         return user
 
@@ -798,6 +802,8 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         path = urijoin(self.base_url, 'repos', self.owner, self.repository)
     
         r = self.fetch(path)
+        if r is None:
+            return '{}'
         repo = r.text
 
         return repo
@@ -855,7 +861,7 @@ class GitCodeClient(HttpClient, RateLimitHandler):
 
     def user(self, login):
         """Get the user information and update the user cache"""
-        user = None
+        user = '{}'
 
         if login in self._users:
             return self._users[login]
@@ -863,9 +869,11 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         url_user = urijoin(self.base_url, 'users', login)
 
         logger.debug("Getting info for %s" % url_user)
-
         r = self.fetch(url_user)
-        user = r.text
+        if r is None:
+            user = '{}'
+        else:
+            user = r.text
         self._users[login] = user
 
         return user
@@ -876,17 +884,11 @@ class GitCodeClient(HttpClient, RateLimitHandler):
             return self._users_orgs[login]
 
         url = urijoin(self.base_url, 'users', login, 'orgs')
-        try:
-            r = self.fetch(url)
+        r = self.fetch(url)
+        if r is None:
+            orgs = '[]'
+        else:
             orgs = r.text
-        except requests.exceptions.HTTPError as error:
-            # 404 not found is wrongly received sometimes
-            if error.response.status_code == 404:
-                logger.error("Can't get gitcode login orgs with %s", url)
-                orgs = '[]'
-            else:
-                raise error
-
         self._users_orgs[login] = orgs
 
         return orgs
@@ -914,34 +916,43 @@ class GitCodeClient(HttpClient, RateLimitHandler):
                 payload = {'access_token': access_token}
             else:
                 payload['access_token'] = access_token
-            
+            response = None
             try:
                 response = super().fetch(url, payload, headers, method, stream, auth)
             except Exception as e:
                 # 429: User exceeded application rate limit
                 # 403: The request is not allowed. For example, the user is not allowed to delete items
                 # 404: The resource cannot be accessed. For example, the resource's ID cannot be found, or the user does not have permission to access the resource
-                if e.response and e.response.status_code == 400 and '"error_code":429' in e.response.text:
-                    if retries == TOEKN_RATE_LIMIT_MAX_RETRIES:
-                        logger.info("All retries failed. Pausing for 2 minutes")
-                        time.sleep(TOEKN_RATE_LIMIT_SLEEP_TIME)
-                        retries = 0
-                    retries += 1
-                    logger.info(f"Retry {url} {retries}...")
-                    time.sleep(1) 
-                    continue
+                if e.response is not None and e.response.status_code == 400:
+                    if '"error_code":429' in e.response.text or '"error_code":504' in e.response.text:
+                        if retries == TOEKN_RATE_LIMIT_MAX_RETRIES:
+                            logger.info("All retries failed. Pausing for 2 minutes")
+                            time.sleep(TOEKN_RATE_LIMIT_SLEEP_TIME)
+                            retries = 0
+                        retries += 1
+                        logger.info(f"Retry {url} {retries}...")
+                        time.sleep(3) 
+                        continue
+                    if '"error_code":404' in e.response.text:
+                        logger.error("Can't get gitcode with %s, error %s", url, e)
+                        return None
+                if e.response is not None and e.response.status_code == 404:
+                    logger.error("Can't get gitcode with %s, error %s", url, e)
+                    return None
+                
                 try:
                     if type(e.args[0]) is str:
                         reason = e.args[0]
                     else:
                         reason = e.args[0].reason.args[0]
-                    if ("403" in reason or "404" in reason) and access_token:
+                    # if ("403" in reason or "404" in reason) and access_token:
+                    if "403" in reason and access_token:
                         self.access_token_list.remove(access_token)
                         logger.info(f"There is a problem with {access_token} token, remove {access_token} token now")
-                        continue
+                        continue                      
                 except Exception as ee:
                     raise e
-                raise e
+                logger.error("Can't get gitcode with %s, error %s", url, e)
             return response
           
 
@@ -955,13 +966,15 @@ class GitCodeClient(HttpClient, RateLimitHandler):
         logger.debug("Get GitCode paginated items from " + url_next)
 
         response = self.fetch(url_next, payload=payload)
+        if response is None:
+            items = '[]'
+        else:
+            items = response.text
 
-        items = response.text
-
-        total_page = response.headers.get('total_page')
-        if total_page:
-            total_page = int(total_page[0])
-            logger.debug("Page: %i/%i" % (page, total_page))
+            total_page = response.headers.get('total_page')
+            if total_page:
+                total_page = int(total_page[0])
+                logger.debug("Page: %i/%i" % (page, total_page))
 
         while items and items != '[]':
             yield items
@@ -970,9 +983,12 @@ class GitCodeClient(HttpClient, RateLimitHandler):
                 page += 1
                 payload['page'] = page
                 response = self.fetch(url_next, payload=payload)
-                items = response.text
-                if total_page:
-                    logger.debug("Page: %i/%i" % (page, total_page))
+                if response is None:
+                    items = '[]'
+                else:
+                    items = response.text
+                    if total_page:
+                        logger.debug("Page: %i/%i" % (page, total_page))
 
     def _set_extra_headers(self):
         """Set extra headers for session"""
