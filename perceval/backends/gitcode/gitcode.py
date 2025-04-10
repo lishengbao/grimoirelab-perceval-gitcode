@@ -266,21 +266,38 @@ class GitCode(Backend):
 
         :returns: a UNIX timestamp
         """
-        if "fetched_on" in item:
-            return item['fetched_on']
-        elif "starred_at" in item:
-            ts = item['starred_at']
-        elif "forks_count" in item and "fetched_on" not in item:
-            ts = item['created_at']
-        elif "watch_at" in item:
-            ts = item['watch_at']
-        elif "action_type" in item:
-            ts = item['created_at']
+        # if "fetched_on" in item:
+        #     return item['fetched_on']
+        # elif "starred_at" in item:
+        #     ts = item['starred_at']
+        # elif "forks_count" in item and "fetched_on" not in item:
+        #     ts = item['created_at']
+        # elif "watch_at" in item:
+        #     ts = item['watch_at']
+        # elif "action_type" in item:
+        #     ts = item['created_at']
+        # else:
+        #     ts = item['updated_at']
+        category_switch = {
+            CATEGORY_ISSUE: item.get('updated_at'),
+            CATEGORY_PULL_REQUEST: item.get('updated_at'),
+            CATEGORY_REPO: item.get('fetched_on'),
+            CATEGORY_EVENT: item.get('created_at'),
+            CATEGORY_STARGAZER: item.get('starred_at'),
+            CATEGORY_FORK: item.get('created_at'),
+            CATEGORY_WATCH: item.get('watch_at')
+        }
+        category = item['backend_category']
+        if category in category_switch:
+            ts = category_switch[category]
         else:
             ts = item['updated_at']
-
-        ts = str_to_datetime(ts)
-        return ts.timestamp()
+            
+        if isinstance(ts, str):
+            ts = str_to_datetime(ts)
+            return ts.timestamp()
+        else:
+            return ts
 
 
     @staticmethod
@@ -291,21 +308,21 @@ class GitCode(Backend):
         'issue', 'pull_request' , 'stargazer', 'fork', 'watch' and 'repo' information.
         """
 
-        if "action_type" in item:
-            category = CATEGORY_EVENT
-        elif "base" in item:
-            category = CATEGORY_PULL_REQUEST
-        elif "fetched_on" in item:
-            category = CATEGORY_REPO
-        elif "starred_at" in item:
-            category = CATEGORY_STARGAZER
-        elif "pushed_at" in item:
-            category = CATEGORY_FORK
-        elif "watch_at" in item:
-            category = CATEGORY_WATCH
-        else:
-            category = CATEGORY_ISSUE
-
+        # if "action_type" in item:
+        #     category = CATEGORY_EVENT
+        # elif "base" in item:
+        #     category = CATEGORY_PULL_REQUEST
+        # elif "fetched_on" in item:
+        #     category = CATEGORY_REPO
+        # elif "starred_at" in item:
+        #     category = CATEGORY_STARGAZER
+        # elif "pushed_at" in item:
+        #     category = CATEGORY_FORK
+        # elif "watch_at" in item:
+        #     category = CATEGORY_WATCH
+        # else:
+        #     category = CATEGORY_ISSUE
+        category = item['backend_category']
         return category
 
     def _init_client(self, from_archive=False):
@@ -324,6 +341,7 @@ class GitCode(Backend):
         for raw_issues in issues_groups:
             issues = json.loads(raw_issues)
             for issue in issues:
+                issue['backend_category'] = CATEGORY_ISSUE
 
                 if str_to_datetime(issue['updated_at']) > to_date:
                     return
@@ -347,6 +365,7 @@ class GitCode(Backend):
         for raw_pulls in raw_pulls_groups:
             pulls = json.loads(raw_pulls)
             for pull in pulls:
+                pull['backend_category'] = CATEGORY_PULL_REQUEST
                 if str_to_datetime(pull['updated_at']) < from_date \
                         or str_to_datetime(pull['updated_at']) > to_date:
                     return
@@ -385,6 +404,7 @@ class GitCode(Backend):
                 for operate_logs_raw in issue_operate_logs_groups:
                     operate_logs = json.loads(operate_logs_raw)
                     for operate_log in operate_logs:
+                        operate_log['backend_category'] = CATEGORY_EVENT
                         if str_to_datetime(operate_log['created_at']) > to_date:
                             return
 
@@ -401,7 +421,7 @@ class GitCode(Backend):
                 for operate_logs_raw in pull_operate_logs_groups:
                     operate_logs = json.loads(operate_logs_raw)
                     for operate_log in operate_logs:
-    
+                        operate_log['backend_category'] = CATEGORY_EVENT
                         if str_to_datetime(operate_log['created_at']) > to_date:
                             return
 
@@ -415,6 +435,7 @@ class GitCode(Backend):
         for raw_stargazers in raw_stargazers_groups:
             stargazers = json.loads(raw_stargazers)
             for stargazer in stargazers:
+                stargazer['backend_category'] = CATEGORY_STARGAZER
                 if str_to_datetime(stargazer['starred_at']) > to_date:
                     return
                 stargazer['user_data'] = self.__get_user(stargazer.get('login'))
@@ -426,7 +447,7 @@ class GitCode(Backend):
         for raw_forks in raw_forks_groups:
             forks = json.loads(raw_forks)
             for fork in forks:
-
+                fork['backend_category'] = CATEGORY_FORK
                 if str_to_datetime(fork['created_at']) > to_date:
                     return
                 fork['user_data'] = self.__get_user(fork.get('owner', {}).get('login'))
@@ -438,7 +459,7 @@ class GitCode(Backend):
         for raw_watchs in raw_watchs_groups:
             watchs = json.loads(raw_watchs)
             for watch in watchs:
-
+                watch['backend_category'] = CATEGORY_WATCH
                 if str_to_datetime(watch['watch_at']) > to_date:
                     return
                 watch['user_data'] = self.__get_user(watch.get('login'))
@@ -449,6 +470,7 @@ class GitCode(Backend):
 
         raw_repo = self.client.repo()
         repo = json.loads(raw_repo)
+        repo['backend_category'] = CATEGORY_REPO
 
         repo_releases_groups = self.client.repo_releases()
         repo_releases = []
